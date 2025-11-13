@@ -24,10 +24,10 @@ int main(void) {
         // loop to draw multiple boxes to brake (10x10 grid)
         for (int i = 0; i < 100; i++) {
             Rectangle brick = {
-                (i % 10) * 80 + 10,  // x position (10 columns, 80px wide each)
-                (i / 10) * 60 + 50,  // y position (10 rows, 60px tall each)
-                70,                   // width
-                40                    // height
+                (i % 30) * 30 + 10,  // x position (10 columns, 80px wide each)
+                (i / 30) * 20 + 50,  // y position (10 rows, 60px tall each)
+                20,                   // width
+                10                    // height
             };
             DrawRectangleRec(brick, RED);
         }
