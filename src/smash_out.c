@@ -25,6 +25,14 @@ typedef enum PowerUpType {
     EXTRA_LIFE
 } PowerUpType;
 
+typedef enum BrickType {
+    BRICK_NORMAL,
+    BRICK_TOUGH,
+    BRICK_EXPLOSIVE,
+    BRICK_SPEED,
+    BRICK_INVISIBLE
+} BrickType;
+
 typedef struct PowerUp {
     Rectangle rect;
     PowerUpType type;
@@ -35,6 +43,9 @@ typedef struct PowerUp {
 typedef struct Brick {
     Rectangle rect;
     bool active;
+    BrickType type;
+    int health;  // For TOUGH bricks: 1-3 hits
+    bool discovered;  // For INVISIBLE bricks: true = revealed
 } Brick;
 
 typedef struct Ball {
@@ -93,15 +104,37 @@ int CountActiveBricks(Brick bricks[]) {
     return count;
 }
 
-Color GetBrickColor(int index) {
-    int row = index / BRICKS_WIDE;
-    switch (row) {
-        case 0: return RED;
-        case 1: return ORANGE;
-        case 2: return YELLOW;
-        case 3: return GREEN;
-        case 4: return BLUE;
-        default: return RED;
+Color GetBrickColor(Brick brick) {
+    // Determine color based on brick type
+    switch (brick.type) {
+        case BRICK_NORMAL: {
+            // Standard row-based coloring
+            int row = 0;
+            for (int i = 0; i < TOTAL_BRICKS; i++) {
+                if (i / BRICKS_WIDE == row) break;
+            }
+            switch (row % 5) {
+                case 0: return RED;
+                case 1: return ORANGE;
+                case 2: return YELLOW;
+                case 3: return GREEN;
+                case 4: return BLUE;
+                default: return RED;
+            }
+        }
+        case BRICK_TOUGH:
+            // Change color based on health (3=dark red, 2=red, 1=pink)
+            if (brick.health == 3) return (Color){80, 0, 0, 255};  // Dark Red
+            if (brick.health == 2) return RED;
+            return (Color){255, 100, 150, 255};  // Pink
+        case BRICK_EXPLOSIVE:
+            return PURPLE;  // Purple for explosive
+        case BRICK_SPEED:
+            return LIME;  // Lime for speed boosts
+        case BRICK_INVISIBLE:
+            return brick.discovered ? GRAY : (Color){0, 0, 0, 0};  // Invisible until hit
+        default:
+            return WHITE;
     }
 }
 
@@ -208,6 +241,9 @@ void LoadLevel(int level, Brick bricks[], Ball balls[]) {
     // Deactivate all bricks first
     for (int i = 0; i < TOTAL_BRICKS; i++) {
         bricks[i].active = false;
+        bricks[i].type = BRICK_NORMAL;
+        bricks[i].health = 1;
+        bricks[i].discovered = true;
     }
     
     // Create pattern based on level
@@ -240,6 +276,33 @@ void LoadLevel(int level, Brick bricks[], Ball balls[]) {
             // Default: fill all bricks
             bricks[i].active = true;
         }
+        
+        // Assign brick types randomly (only for active bricks)
+        if (bricks[i].active) {
+            int typeRoll = rand() % 100;
+            if (typeRoll < 60) {
+                // 60% Normal
+                bricks[i].type = BRICK_NORMAL;
+                bricks[i].health = 1;
+            } else if (typeRoll < 75) {
+                // 15% Tough (increases with level)
+                bricks[i].type = BRICK_TOUGH;
+                bricks[i].health = (level >= 3) ? 3 : (level == 2 ? 2 : 1);
+            } else if (typeRoll < 85) {
+                // 10% Explosive
+                bricks[i].type = BRICK_EXPLOSIVE;
+                bricks[i].health = 1;
+            } else if (typeRoll < 92) {
+                // 7% Speed
+                bricks[i].type = BRICK_SPEED;
+                bricks[i].health = 1;
+            } else {
+                // 8% Invisible (increases with level)
+                bricks[i].type = BRICK_INVISIBLE;
+                bricks[i].health = 1;
+                bricks[i].discovered = (level == 1) ? true : false;
+            }
+        }
     }
     
     // Reset balls with increased speed per level
@@ -263,6 +326,33 @@ int CountActiveBricksInLevel(Brick bricks[]) {
         if (bricks[i].active) count++;
     }
     return count;
+}
+
+// Destroy adjacent bricks for explosive brick effect
+void DestroyAdjacentBricks(Brick bricks[], int brickIndex, int *scoreBonus) {
+    if (brickIndex < 0 || brickIndex >= TOTAL_BRICKS) return;
+    
+    int row = brickIndex / BRICKS_WIDE;
+    
+    // Define adjacent positions (up, down, left, right)
+    int adjacentOffsets[] = { -BRICKS_WIDE, BRICKS_WIDE, -1, 1 };
+    
+    for (int i = 0; i < 4; i++) {
+        int adjacentIndex = brickIndex + adjacentOffsets[i];
+        
+        // Check bounds
+        if (adjacentIndex < 0 || adjacentIndex >= TOTAL_BRICKS) continue;
+        
+        // Don't destroy bricks on wrong row (for left/right neighbors)
+        int adjRow = adjacentIndex / BRICKS_WIDE;
+        if ((i == 2 || i == 3) && adjRow != row) continue;  // Left/right check
+        
+        // Destroy adjacent brick
+        if (bricks[adjacentIndex].active) {
+            bricks[adjacentIndex].active = false;
+            *scoreBonus += 10;
+        }
+    }
 }
 
 int main(void) {
@@ -341,6 +431,9 @@ int main(void) {
             brickHeight 
         };
         bricks[i].active = true;
+        bricks[i].type = BRICK_NORMAL;
+        bricks[i].health = 1;
+        bricks[i].discovered = true;
     }
 
     SetTargetFPS(60);
@@ -369,35 +462,6 @@ int main(void) {
             
             // Update particles
             UpdateParticles(menuParticles, MAX_PARTICLES, 0.5f);
-            
-            // Button handling
-            // Start button
-            Rectangle startButton = { 300, 300, 200, 60 };
-            if (DrawButton(startButton, "START", 30, BLUE, SKYBLUE)) {
-                StopMusicStream(menuMusic);
-                menuMusicPlaying = false;
-                gameState = PLAYING;
-                currentLevel = 1;
-                levelNotificationTimer = 0.0f;
-                LoadLevel(currentLevel, bricks, balls);
-                score = 0;
-                lives = 3;
-                paddleBuffTimer = 0.0f;
-                paddle.x = screenWidth / 2 - 50;
-                paddle.width = paddleOriginalWidth;
-            }
-            
-            // Settings button
-            Rectangle settingsButton = { 300, 380, 200, 60 };
-            if (DrawButton(settingsButton, "SETTINGS", 20, ORANGE, YELLOW)) {
-                gameState = SETTINGS;
-            }
-            
-            // Exit button
-            Rectangle exitButton = { 300, 460, 200, 60 };
-            if (DrawButton(exitButton, "EXIT", 30, RED, ORANGE)) {
-                break; // Exit game loop
-            }
         }
         // --- PLAYING STATE ---
         else if (gameState == PLAYING) {
@@ -452,12 +516,58 @@ int main(void) {
                 for (int i = 0; i < TOTAL_BRICKS; i++) {
                     if (bricks[i].active) {
                         if (CheckCollisionCircleRec(balls[b].position, balls[b].radius, bricks[i].rect)) {
-                            bricks[i].active = false;
                             balls[b].speed.y *= -1.0f;
-                            score += 10;
                             PlaySound(brickHitSound);
                             
-                            // 20% chance to spawn power-up
+                            int scoreGain = 10;
+                            
+                            // Handle brick types
+                            switch (bricks[i].type) {
+                                case BRICK_NORMAL:
+                                    bricks[i].active = false;
+                                    break;
+                                    
+                                case BRICK_TOUGH:
+                                    bricks[i].health--;
+                                    if (bricks[i].health <= 0) {
+                                        bricks[i].active = false;
+                                        scoreGain = 30;  // More points for tough bricks
+                                    } else {
+                                        scoreGain = 5;  // Partial points for damage
+                                    }
+                                    break;
+                                    
+                                case BRICK_EXPLOSIVE:
+                                    bricks[i].active = false;
+                                    DestroyAdjacentBricks(bricks, i, &scoreGain);
+                                    scoreGain += 20;  // Base points + adjacent bonuses
+                                    break;
+                                    
+                                case BRICK_SPEED:
+                                    bricks[i].active = false;
+                                    // Increase ball speed permanently for this level
+                                    balls[b].speed.x *= 1.2f;
+                                    balls[b].speed.y *= 1.2f;
+                                    scoreGain = 25;
+                                    break;
+                                    
+                                case BRICK_INVISIBLE:
+                                    bricks[i].discovered = true;  // Reveal it
+                                    if (bricks[i].discovered) {
+                                        bricks[i].active = false;  // Actually destroy it next hit
+                                        scoreGain = 15;  // Points for discovery and destruction
+                                    } else {
+                                        scoreGain = 5;  // Points for discovery
+                                    }
+                                    break;
+                                    
+                                default:
+                                    bricks[i].active = false;
+                            }
+                            
+                            score += scoreGain;
+                            
+                            // 20% chance to spawn power-up (except from tough with health > 0)
                             if ((rand() % 100) < POWERUP_SPAWN_CHANCE) {
                                 SpawnPowerUp(powerups, (int)(bricks[i].rect.x + bricks[i].rect.width / 2), (int)bricks[i].rect.y);
                             }
@@ -592,6 +702,35 @@ int main(void) {
             
             // Draw subtitle
             DrawText("Click to Play or Press SPACE", screenWidth / 2 - 160, 180, 20, LIGHTGRAY);
+            
+            // Button handling and drawing
+            // Start button
+            Rectangle startButton = { 300, 300, 200, 60 };
+            if (DrawButton(startButton, "START", 30, BLUE, SKYBLUE)) {
+                StopMusicStream(menuMusic);
+                menuMusicPlaying = false;
+                gameState = PLAYING;
+                currentLevel = 1;
+                levelNotificationTimer = 0.0f;
+                LoadLevel(currentLevel, bricks, balls);
+                score = 0;
+                lives = 3;
+                paddleBuffTimer = 0.0f;
+                paddle.x = screenWidth / 2 - 50;
+                paddle.width = paddleOriginalWidth;
+            }
+            
+            // Settings button
+            Rectangle settingsButton = { 300, 380, 200, 60 };
+            if (DrawButton(settingsButton, "SETTINGS", 20, ORANGE, YELLOW)) {
+                gameState = SETTINGS;
+            }
+            
+            // Exit button
+            Rectangle exitButton = { 300, 460, 200, 60 };
+            if (DrawButton(exitButton, "EXIT", 30, RED, ORANGE)) {
+                break; // Exit game loop
+            }
         }
         else if (gameState == PLAYING) {
             // Draw HUD Bar Background
@@ -601,9 +740,13 @@ int main(void) {
             // Draw Bricks
             for (int i = 0; i < TOTAL_BRICKS; i++) {
                 if (bricks[i].active) {
-                    DrawRectangleRec(bricks[i].rect, GetBrickColor(i));
+                    DrawRectangleRec(bricks[i].rect, GetBrickColor(bricks[i]));
                     DrawRectangleLines((int)bricks[i].rect.x, (int)bricks[i].rect.y, 
                                      (int)bricks[i].rect.width, (int)bricks[i].rect.height, BLACK);
+                } else if (bricks[i].type == BRICK_INVISIBLE && !bricks[i].discovered && bricks[i].rect.x > 0) {
+                    // Draw undiscovered invisible bricks as a faint outline
+                    DrawRectangleLines((int)bricks[i].rect.x, (int)bricks[i].rect.y, 
+                                     (int)bricks[i].rect.width, (int)bricks[i].rect.height, (Color){100, 100, 100, 80});
                 }
             }
 
